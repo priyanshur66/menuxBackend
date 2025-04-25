@@ -44,16 +44,23 @@ const menuSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  menu: [categorySchema],
-  created_by: {
+  owner: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: false
+    required: true
+  },
+  menu: [categorySchema],
+  isActive: {
+    type: Boolean,
+    default: true
   }
 }, { 
   timestamps: true,
   versionKey: false
 });
+
+// Index for quick search by restaurant name and owner
+menuSchema.index({ restaurant_name: 1, owner: 1 });
 
 const Menu = mongoose.model('Menu', menuSchema);
 

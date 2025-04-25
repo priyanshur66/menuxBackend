@@ -5,8 +5,10 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import cookieParser from 'cookie-parser';
 
 import menuRoutes from './routes/menu.routes.js';
+import authRoutes from './routes/auth.routes.js';
 import errorHandler from './middlewares/error.middleware.js';
 import requestLogger from './middlewares/logger.middleware.js';
 
@@ -28,6 +30,7 @@ console.log(`[Server] Server time: ${new Date().toISOString()}`);
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
 
 // Morgan HTTP request logger only in development mode
 if (process.env.NODE_ENV === 'development') {
@@ -43,6 +46,7 @@ console.log(`[Server] Static file path configured: ${path.join(__dirname, '../up
 
 // API Routes
 app.use('/api/menus', menuRoutes);
+app.use('/api/auth', authRoutes);
 console.log(`[Server] Routes registered`);
 
 // Health check route

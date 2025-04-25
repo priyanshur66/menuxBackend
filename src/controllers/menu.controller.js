@@ -27,11 +27,17 @@ export const createMenu = async (req, res) => {
 
     // Check if restaurant name was provided
     const providedRestaurantName = req.body.restaurant_name;
-    if (providedRestaurantName) {
-      console.log(`[Controller] Restaurant name provided: "${providedRestaurantName}"`);
-    } else {
-      console.log(`[Controller] No restaurant name provided, will extract from images`);
+    if (!providedRestaurantName) {
+      console.log(`[Controller] Restaurant name is required`);
+      return res.status(400).json({
+        success: false,
+        message: 'Restaurant name is required'
+      });
     }
+    console.log(`[Controller] Restaurant name provided: "${providedRestaurantName}"`);
+
+    // Check that user owns this restaurant (this is enforced by middleware)
+    console.log(`[Controller] User ${req.user.name} (${req.user._id}) is creating menu for their restaurant "${providedRestaurantName}"`);
 
     console.log(`[Controller] ${req.files.length} images received`);
     req.files.forEach((file, index) => {
@@ -53,11 +59,13 @@ export const createMenu = async (req, res) => {
     console.timeEnd(`[Controller] Menu extraction duration`);
     console.log(`[Controller] Menu extraction complete`);
 
-    // Override restaurant name if provided
-    if (providedRestaurantName) {
-      console.log(`[Controller] Overriding extracted restaurant name "${menuData.restaurant_name}" with provided name "${providedRestaurantName}"`);
-      menuData.restaurant_name = providedRestaurantName;
-    }
+    // Override restaurant name with the provided one
+    console.log(`[Controller] Setting restaurant name to "${providedRestaurantName}"`);
+    menuData.restaurant_name = providedRestaurantName;
+
+    // Add owner ID to the menu data
+    menuData.owner = req.user._id;
+    console.log(`[Controller] Setting menu owner to user ID: ${req.user._id}`);
 
     // Save the menu data to the database
     console.log(`[Controller] Creating new menu document in database`);
@@ -92,8 +100,16 @@ export const createMenu = async (req, res) => {
 export const getAllMenus = async (req, res) => {
   console.log(`[Controller] Fetching all menus at ${new Date().toISOString()}`);
   try {
+    let query = {};
+    
+    // If not admin, only show menus owned by this user
+    if (req.user && req.user.role !== 'admin') {
+      console.log(`[Controller] Restricting menu list to owner: ${req.user._id}`);
+      query.owner = req.user._id;
+    }
+    
     console.time(`[Controller] Database query duration`);
-    const menus = await Menu.find();
+    const menus = await Menu.find(query);
     console.timeEnd(`[Controller] Database query duration`);
     console.log(`[Controller] Found ${menus.length} menus`);
     
@@ -133,6 +149,15 @@ export const getMenuById = async (req, res) => {
       });
     }
     
+    // Check if user has permission to view this menu (admin can view all)
+    if (req.user.role !== 'admin' && menu.owner.toString() !== req.user._id.toString()) {
+      console.log(`[Controller] User ${req.user._id} not authorized to view menu ${id}`);
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view this menu'
+      });
+    }
+    
     console.log(`[Controller] Found menu for restaurant: "${menu.restaurant_name}"`);
     res.status(200).json({
       success: true,
@@ -169,7 +194,15 @@ export const updateMenu = async (req, res) => {
       });
     }
 
-    // Find and update the menu
+    // Menu ownership verification done in auth middleware - req.menu contains the menu
+    const menu = req.menu;
+    
+    // Prevent changing ownership
+    if (updateData.owner) {
+      delete updateData.owner;
+    }
+    
+    // Update the menu
     console.log(`[Controller] Updating menu document in database`);
     console.time(`[Controller] Database update duration`);
     const updatedMenu = await Menu.findByIdAndUpdate(
@@ -178,14 +211,6 @@ export const updateMenu = async (req, res) => {
       { new: true, runValidators: true }
     );
     console.timeEnd(`[Controller] Database update duration`);
-    
-    if (!updatedMenu) {
-      console.log(`[Controller] Menu with ID ${id} not found for update`);
-      return res.status(404).json({
-        success: false,
-        message: 'Menu not found'
-      });
-    }
     
     console.log(`[Controller] Menu updated successfully`);
     res.status(200).json({
@@ -212,19 +237,14 @@ export const deleteMenu = async (req, res) => {
   const { id } = req.params;
   console.log(`[Controller] Deleting menu with ID: ${id} at ${new Date().toISOString()}`);
   try {
-    // Find and delete the menu
+    // Menu ownership verification done in auth middleware - req.menu contains the menu
+    const menu = req.menu;
+    
+    // Delete the menu
     console.log(`[Controller] Removing menu from database`);
     console.time(`[Controller] Database delete duration`);
     const deletedMenu = await Menu.findByIdAndDelete(id);
     console.timeEnd(`[Controller] Database delete duration`);
-    
-    if (!deletedMenu) {
-      console.log(`[Controller] Menu with ID ${id} not found for deletion`);
-      return res.status(404).json({
-        success: false,
-        message: 'Menu not found'
-      });
-    }
     
     console.log(`[Controller] Deleted menu for restaurant: "${deletedMenu.restaurant_name}"`);
     res.status(200).json({
@@ -250,27 +270,23 @@ export const updateMenuWithImages = async (req, res) => {
   const { id } = req.params;
   console.log(`[Controller] Updating menu with new images for ID: ${id} at ${new Date().toISOString()}`);
   try {
-    // Check if menu exists
-    console.log(`[Controller] Checking if menu exists`);
-    console.time(`[Controller] Menu existence check duration`);
-    const existingMenu = await Menu.findById(id);
-    console.timeEnd(`[Controller] Menu existence check duration`);
+    // Menu ownership verification done in auth middleware - req.menu contains the menu
+    const menu = req.menu;
     
-    if (!existingMenu) {
-      console.log(`[Controller] Menu with ID ${id} not found`);
-      return res.status(404).json({
-        success: false,
-        message: 'Menu not found'
-      });
-    }
-    console.log(`[Controller] Found existing menu for restaurant: "${existingMenu.restaurant_name}"`);
-
     // Check if restaurant name was provided
     const providedRestaurantName = req.body.restaurant_name;
     if (providedRestaurantName) {
+      // Verify ownership of the new restaurant name
+      if (!req.user.ownsRestaurant(providedRestaurantName) && req.user.role !== 'admin') {
+        console.log(`[Controller] User doesn't own restaurant "${providedRestaurantName}"`);
+        return res.status(403).json({
+          success: false,
+          message: `You don't own the restaurant '${providedRestaurantName}'`
+        });
+      }
       console.log(`[Controller] New restaurant name provided: "${providedRestaurantName}"`);
     } else {
-      console.log(`[Controller] No new restaurant name provided`);
+      console.log(`[Controller] Using existing restaurant name: "${menu.restaurant_name}"`);
     }
 
     // Check if files were uploaded
@@ -307,11 +323,13 @@ export const updateMenuWithImages = async (req, res) => {
     if (providedRestaurantName) {
       console.log(`[Controller] Using provided restaurant name: "${providedRestaurantName}"`);
       menuData.restaurant_name = providedRestaurantName;
-    } else if (existingMenu.restaurant_name && !menuData.restaurant_name) {
-      // If OpenAI couldn't extract a restaurant name but we already have one, keep it
-      console.log(`[Controller] Using existing restaurant name: "${existingMenu.restaurant_name}"`);
-      menuData.restaurant_name = existingMenu.restaurant_name;
+    } else {
+      console.log(`[Controller] Using existing restaurant name: "${menu.restaurant_name}"`);
+      menuData.restaurant_name = menu.restaurant_name;
     }
+
+    // Ensure owner ID remains the same
+    menuData.owner = menu.owner;
 
     // Update the existing menu
     console.log(`[Controller] Updating menu document in database`);
